@@ -1053,7 +1053,9 @@ public partial class ScanViewModel : ObservableObject, IDisposable
                 metrics += $" · 捕获 {screen.Stats.CaptureFps:F0} FPS";
                 if (screen.IsFallbackMode)
                 {
-                    metrics += " · GDI 回退";
+                    metrics += screen.LastError is not null
+                        ? $" · GDI 回退（原因:{screen.LastError}）"
+                        : " · GDI 回退";
                 }
                 if (screen.Width > 0 && screen.Height > 0)
                 {
@@ -1063,7 +1065,7 @@ public partial class ScanViewModel : ObservableObject, IDisposable
                 {
                     metrics += $" · {screen.AdapterName}";
                 }
-                if (screen.LastError is not null)
+                if (!screen.IsFallbackMode && screen.LastError is not null)
                 {
                     metrics += $" · 错误:{screen.LastError}";
                 }

@@ -1055,6 +1055,14 @@ public partial class ScanViewModel : ObservableObject, IDisposable
                 {
                     metrics += $" · {screen.Width}×{screen.Height}";
                 }
+                if (screen.LastError is not null)
+                {
+                    metrics += $" · 错误:{screen.LastError}";
+                }
+                else if (pool.CapturedFrames == 0)
+                {
+                    metrics += " · 等待画面变化（桌面静止时 Desktop Duplication 不出帧）";
+                }
             }
             ScanMetricsText = metrics;
         }

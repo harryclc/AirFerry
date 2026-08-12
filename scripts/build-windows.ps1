@@ -34,7 +34,7 @@ function Warn($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "[X] $msg" -ForegroundColor Red; exit 1 }
 
 # 版本号取自 apps/sender/package.json（与 build-all.sh 同源）。
-$Pkg = Get-Content "$Root/apps/sender/package.json" -Raw | ConvertFrom-Json
+$Pkg = Get-Content "$Root/apps/sender/package.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 $Ver = $Pkg.version
 Info "AirFerry Windows 构建 (v$Ver)"
 

@@ -53,6 +53,8 @@ access_lost_count / restart_count / unavailable_count
 ## 5. 错误恢复
 
 - `DXGI_ERROR_ACCESS_LOST`：释放 duplication → 等待 200ms → 重新枚举 → 按设备名优先重解析 → 重建；绝不退出接收端。
+- `DXGI_ERROR_UNSUPPORTED`（适配器不支持 Desktop Duplication，常见于未装显卡驱动/基本显示适配器/虚拟机无 3D 加速/远程桌面会话）：
+  自动回退到 **GDI BitBlt** 兼容捕获（约 60 FPS 轮询 + 1 秒一次分辨率变化检测），界面会标注“GDI 回退”；DXGI 失败原因保留在 `FallbackReason`。
 - 所选显示器消失：进入“显示器不可用”状态并提示，不静默切换其他屏；显示器恢复后自动重试。
 - 分辨率变化：重建 staging texture 与灰度/预览 Mat。
 - `Rotation != 0`：记录 warning，V1 按原始 surface 捕获。
@@ -64,7 +66,7 @@ access_lost_count / restart_count / unavailable_count
 ScreenCaptureProbe [--screen primary|N] [--seconds N] [--save-frame path.png] [--log path.log]
 ```
 
-输出：显示器列表、锁定设备、FPS、分辨率、估算刷新率、ACCESS_LOST/重建次数、重复帧比例（每 30 帧采样比对降采样灰度指纹，信息性估算）。
+输出：显示器列表、锁定设备、捕获模式（DXGI / GDI 回退）、适配器名称、FPS、分辨率、估算刷新率、ACCESS_LOST/重建次数、重复帧比例（每 30 帧采样比对降采样灰度指纹，信息性估算）。
 
 ## 7. 验收
 

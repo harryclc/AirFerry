@@ -8,7 +8,7 @@ namespace AirFerry.Windows.ScreenCaptureProbe;
 /// <summary>
 /// DXGI 屏幕捕获独立探测工具（Phase 1）：捕获所选显示器 N 秒，输出
 /// FPS / 分辨率 / 帧数 / 重复帧比例（估算），可选 --save-frame 保存一帧截图。
-/// 用法：ScreenCaptureProbe [--screen primary|N] [--seconds N] [--save-frame path.png]
+/// 用法：ScreenCaptureProbe [--screen primary|N] [--seconds N] [--save-frame path.png] [--log path.log] [--gdi]
 /// </summary>
 internal static class Program
 {
@@ -18,6 +18,7 @@ internal static class Program
         int seconds = 10;
         string? saveFrame = null;
         string? logPath = null;
+        bool forceGdi = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -37,6 +38,9 @@ internal static class Program
                     break;
                 case "--log" when i + 1 < args.Length:
                     logPath = args[++i];
+                    break;
+                case "--gdi":
+                    forceGdi = true;
                     break;
                 default:
                     PrintUsage();
@@ -76,7 +80,7 @@ internal static class Program
             Console.WriteLine($"警告: 显示器旋转 {target.RotationDegrees}°，V1 按原始 surface 捕获（不支持旋转）");
         }
 
-        using var source = new ScreenCaptureSource(target.DeviceName);
+        using var source = new ScreenCaptureSource(target.DeviceName, forceGdiFallback: forceGdi);
         long start = Stopwatch.GetTimestamp();
         long deadline = start + (long)Stopwatch.Frequency * seconds;
         ulong frames = 0;
@@ -138,6 +142,12 @@ internal static class Program
         Console.WriteLine("--- 结果 ---");
         Console.WriteLine($"捕获帧数:        {frames}");
         Console.WriteLine($"锁定设备:        {source.SelectedDeviceName ?? "(未初始化)"}");
+        Console.WriteLine($"捕获模式:        {source.CaptureModeName}");
+        if (source.IsFallbackMode)
+        {
+            Console.WriteLine($"回退原因:        {source.FallbackReason ?? "未知"}");
+        }
+        Console.WriteLine($"适配器:          {source.AdapterName ?? "未知"}");
         Console.WriteLine($"平均 FPS:         {frames / Math.Max(0.001, elapsed):F1}");
         Console.WriteLine($"分辨率:           {source.Width}×{source.Height}");
         Console.WriteLine($"估算刷新率:       {source.EstimatedRefreshHz:F0} Hz");
@@ -166,6 +176,6 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("用法: ScreenCaptureProbe [--screen primary|N] [--seconds N] [--save-frame path.png]");
+        Console.WriteLine("用法: ScreenCaptureProbe [--screen primary|N] [--seconds N] [--save-frame path.png] [--log path.log] [--gdi]");
     }
 }

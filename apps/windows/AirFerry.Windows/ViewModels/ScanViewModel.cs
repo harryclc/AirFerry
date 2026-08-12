@@ -1051,9 +1051,17 @@ public partial class ScanViewModel : ObservableObject, IDisposable
             if (_capture is ScreenCaptureSource screen)
             {
                 metrics += $" · 捕获 {screen.Stats.CaptureFps:F0} FPS";
+                if (screen.IsFallbackMode)
+                {
+                    metrics += " · GDI 回退";
+                }
                 if (screen.Width > 0 && screen.Height > 0)
                 {
                     metrics += $" · {screen.Width}×{screen.Height}";
+                }
+                if (screen.AdapterName is not null)
+                {
+                    metrics += $" · {screen.AdapterName}";
                 }
                 if (screen.LastError is not null)
                 {

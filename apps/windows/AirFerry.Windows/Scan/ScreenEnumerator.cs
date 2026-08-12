@@ -22,6 +22,15 @@ public static class ScreenEnumerator
             {
                 using (adapter)
                 {
+                    string? adapterName = null;
+                    try
+                    {
+                        adapterName = adapter.Description1.Description;
+                    }
+                    catch
+                    {
+                        adapterName = null;
+                    }
                     int outputIndex = 0;
                     while (TryGetOutput(adapter, outputIndex, out IDXGIOutput? output) &&
                            output is not null)
@@ -64,7 +73,8 @@ public static class ScreenEnumerator
                                 DesktopLeft: left,
                                 DesktopTop: top,
                                 IsPrimary: primary,
-                                RotationDegrees: rotation));
+                                RotationDegrees: rotation,
+                                AdapterName: adapterName));
                         }
                         outputIndex++;
                     }

@@ -19,7 +19,9 @@ public sealed record ScreenInfo(
     /// <summary>是否主显示器（桌面坐标包含 (0,0)）。</summary>
     bool IsPrimary,
     /// <summary>旋转角度：0/90/180/270。</summary>
-    int RotationDegrees)
+    int RotationDegrees,
+    /// <summary>所属图形适配器名称（如 Intel Iris Xe / OrayIddDriver），诊断用。</summary>
+    string? AdapterName = null)
 {
     /// <summary>桌面坐标 Right（Left + Width）。</summary>
     public int DesktopRight => DesktopLeft + Width;
@@ -31,7 +33,8 @@ public sealed record ScreenInfo(
     {
         string primary = IsPrimary ? " · 主显示器" : string.Empty;
         string rotation = RotationDegrees == 0 ? string.Empty : $" · 旋转 {RotationDegrees}°";
-        return $"屏幕 {Index + 1}{primary} · {Width}×{Height}{rotation}";
+        string adapter = string.IsNullOrEmpty(AdapterName) ? string.Empty : $" · {AdapterName}";
+        return $"屏幕 {Index + 1}{primary} · {Width}×{Height}{rotation}{adapter}";
     }
 }
 

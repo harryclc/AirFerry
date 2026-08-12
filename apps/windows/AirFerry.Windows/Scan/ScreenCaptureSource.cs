@@ -26,12 +26,22 @@ public sealed class ScreenCaptureSource : IFrameProducer
     private const int RecreateDelayMs = 200;
     private const int UnavailableRetryMs = 250;
     private const int PreviewFps = 15;
+    private const int GdiPollFps = 60;
 
     private const int DxgiErrorWaitTimeout = unchecked((int)0x887A0027);
     private const int DxgiErrorAccessLost = unchecked((int)0x887A0026);
+    private const uint SrcCopy = 0x00CC0020;
+    private const uint DibRgbColors = 0;
+
+    private enum CaptureMode
+    {
+        DesktopDuplication,
+        GdiBitBlt,
+    }
 
     private readonly string _selection;
     private readonly ScreenCaptureSettings _settings;
+    private readonly bool _forceGdiFallback;
     private readonly ScreenCaptureStats _stats = new();
 
     private IDXGIFactory1? _factory;
@@ -53,15 +63,28 @@ public sealed class ScreenCaptureSource : IFrameProducer
     private long _lastPresentTime;
     private double _estimatedRefreshHz;
     private string? _lastError;
+    private CaptureMode _mode = CaptureMode.DesktopDuplication;
+    private string? _adapterName;
+    private string? _fallbackReason;
+    private int _screenLeft;
+    private int _screenTop;
+    private long _nextPollAt;
+    private long _nextGdiResizeCheckAt;
+    private IntPtr _screenDc;
+    private IntPtr _memDc;
+    private IntPtr _dibSection;
+    private IntPtr _oldBitmap;
+    private IntPtr _dibBits;
 
-    public ScreenCaptureSource(string selection, ScreenCaptureSettings settings)
+    public ScreenCaptureSource(string selection, ScreenCaptureSettings settings, bool forceGdiFallback = false)
     {
         _selection = string.IsNullOrWhiteSpace(selection) ? "primary" : selection.Trim();
         _settings = settings ?? ScreenCaptureSettings.Default;
+        _forceGdiFallback = forceGdiFallback;
     }
 
-    public ScreenCaptureSource(string selection)
-        : this(selection, ScreenCaptureSettings.Default)
+    public ScreenCaptureSource(string selection, bool forceGdiFallback = false)
+        : this(selection, ScreenCaptureSettings.Default, forceGdiFallback)
     {
     }
 
@@ -81,6 +104,19 @@ public sealed class ScreenCaptureSource : IFrameProducer
     /// <summary>最近一次初始化/恢复失败的诊断信息；无失败为 null。</summary>
     public string? LastError => _lastError;
 
+    /// <summary>当前捕获模式：DXGI Desktop Duplication 或 GDI BitBlt（兼容回退）。</summary>
+    public string CaptureModeName =>
+        _mode == CaptureMode.GdiBitBlt ? "GDI BitBlt（兼容回退）" : "DXGI Desktop Duplication";
+
+    /// <summary>是否处于 GDI BitBlt 兼容回退模式。</summary>
+    public bool IsFallbackMode => _mode == CaptureMode.GdiBitBlt;
+
+    /// <summary>初始化时使用的图形适配器名称（诊断用）。</summary>
+    public string? AdapterName => _adapterName;
+
+    /// <summary>触发 GDI 回退的原始 DXGI 失败原因；DXGI 模式为 null。</summary>
+    public string? FallbackReason => _fallbackReason;
+
     public Mat? ReadGray()
     {
         if (_disposed)
@@ -89,6 +125,10 @@ public sealed class ScreenCaptureSource : IFrameProducer
         }
 
         EnsureInitialized();
+        if (_mode == CaptureMode.GdiBitBlt)
+        {
+            return ReadGrayGdi();
+        }
         if (_unavailable || _duplication is null || _context is null || _staging is null)
         {
             Thread.Sleep(UnavailableRetryMs);
@@ -228,6 +268,8 @@ public sealed class ScreenCaptureSource : IFrameProducer
         _factory?.Dispose();
         _factory = null;
 
+        GdiCleanup();
+
         _gray?.Dispose();
         _gray = null;
         _roiView?.Dispose();
@@ -259,6 +301,28 @@ public sealed class ScreenCaptureSource : IFrameProducer
             return;
         }
 
+        if (_forceGdiFallback)
+        {
+            _adapterName ??= screen.AdapterName;
+            _fallbackReason ??= "强制 --gdi 模式";
+            if (TryInitGdiFallback(screen))
+            {
+                _mode = CaptureMode.GdiBitBlt;
+                _selectedDeviceName = screen.DeviceName;
+                Width = screen.Width;
+                Height = screen.Height;
+                _initialized = true;
+                _unavailable = false;
+            }
+            else
+            {
+                _lastError ??= "GDI 捕获初始化失败（显示器不可用）";
+                _stats.OnUnavailable();
+                _unavailable = true;
+            }
+            return;
+        }
+
         if (TryInitialize(screen))
         {
             _selectedDeviceName = screen.DeviceName;
@@ -269,10 +333,24 @@ public sealed class ScreenCaptureSource : IFrameProducer
         }
         else
         {
-            _lastError ??= "初始化 DXGI 捕获失败（显示器不可用或图形适配器不支持）";
-            _stats.OnUnavailable();
-            _unavailable = true;
             CleanupDeviceResources();
+            string? dxgiReason = _lastError;
+            if (TryInitGdiFallback(screen))
+            {
+                _mode = CaptureMode.GdiBitBlt;
+                _fallbackReason = dxgiReason;
+                _selectedDeviceName = screen.DeviceName;
+                Width = screen.Width;
+                Height = screen.Height;
+                _initialized = true;
+                _unavailable = false;
+            }
+            else
+            {
+                _lastError ??= "初始化 DXGI/GDI 捕获失败（显示器不可用或图形适配器不支持）";
+                _stats.OnUnavailable();
+                _unavailable = true;
+            }
         }
     }
 
@@ -298,6 +376,14 @@ public sealed class ScreenCaptureSource : IFrameProducer
             {
                 _lastError = "未找到可用的 DXGI 适配器";
                 return false;
+            }
+            try
+            {
+                _adapterName = adapter.Description1.Description;
+            }
+            catch
+            {
+                _adapterName = null;
             }
 
             // 遍历 adapter 找到目标输出；找不到则释放并失败。
@@ -385,7 +471,7 @@ public sealed class ScreenCaptureSource : IFrameProducer
             }
             catch (Exception ex)
             {
-                _lastError = $"DuplicateOutput 失败: {ex.Message}";
+                _lastError = $"DuplicateOutput 失败（适配器 {_adapterName ?? "未知"}）: {ex.Message}";
                 targetOutput.Dispose();
                 adapter?.Dispose();
                 return false;
@@ -413,6 +499,10 @@ public sealed class ScreenCaptureSource : IFrameProducer
 
     private void RecreateDuplication()
     {
+        if (_mode == CaptureMode.GdiBitBlt)
+        {
+            return;
+        }
         CleanupDuplication();
         Thread.Sleep(RecreateDelayMs);
         _stats.OnRestart();
@@ -452,12 +542,12 @@ public sealed class ScreenCaptureSource : IFrameProducer
 
     private void EnsureTargets(int width, int height)
     {
-        if (_staging is not null && _gray is not null && Width == width && Height == height)
+        if (_gray is not null && _bgrPreview is not null && Width == width && Height == height)
         {
             return;
         }
 
-        if (width <= 0 || height <= 0 || _device is null)
+        if (width <= 0 || height <= 0)
         {
             return;
         }
@@ -471,20 +561,23 @@ public sealed class ScreenCaptureSource : IFrameProducer
         _staging?.Dispose();
         _staging = null;
 
-        var description = new Texture2DDescription
+        if (_mode == CaptureMode.DesktopDuplication && _device is not null)
         {
-            Width = (uint)width,
-            Height = (uint)height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = Format.B8G8R8A8_UNorm,
-            SampleDescription = new SampleDescription(1, 0),
-            Usage = ResourceUsage.Staging,
-            BindFlags = BindFlags.None,
-            CPUAccessFlags = CpuAccessFlags.Read,
-            MiscFlags = ResourceOptionFlags.None,
-        };
-        _staging = _device.CreateTexture2D(description);
+            var description = new Texture2DDescription
+            {
+                Width = (uint)width,
+                Height = (uint)height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Staging,
+                BindFlags = BindFlags.None,
+                CPUAccessFlags = CpuAccessFlags.Read,
+                MiscFlags = ResourceOptionFlags.None,
+            };
+            _staging = _device.CreateTexture2D(description);
+        }
         _gray = new Mat(height, width, MatType.CV_8UC1);
         _bgrPreview = new Mat(height, width, MatType.CV_8UC3);
 
@@ -524,6 +617,207 @@ public sealed class ScreenCaptureSource : IFrameProducer
             }
         }
         _lastPresentTime = lastPresentTime;
+    }
+
+    private bool TryInitGdiFallback(ScreenInfo screen)
+    {
+        try
+        {
+            _screenDc = NativeMethods.GetDC(IntPtr.Zero);
+            if (_screenDc == IntPtr.Zero)
+            {
+                _lastError = "GDI GetDC 失败";
+                return false;
+            }
+            _memDc = NativeMethods.CreateCompatibleDC(_screenDc);
+            if (_memDc == IntPtr.Zero)
+            {
+                _lastError = "GDI CreateCompatibleDC 失败";
+                GdiCleanup();
+                return false;
+            }
+            if (!EnsureGdiTargets(screen))
+            {
+                GdiCleanup();
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _lastError = $"GDI 初始化异常: {ex.Message}";
+            GdiCleanup();
+            return false;
+        }
+    }
+
+    private bool EnsureGdiTargets(ScreenInfo screen)
+    {
+        if (_dibSection != IntPtr.Zero)
+        {
+            if (_memDc != IntPtr.Zero && _oldBitmap != IntPtr.Zero)
+            {
+                NativeMethods.SelectObject(_memDc, _oldBitmap);
+            }
+            NativeMethods.DeleteObject(_dibSection);
+            _dibSection = IntPtr.Zero;
+            _dibBits = IntPtr.Zero;
+        }
+
+        var header = new NativeMethods.BitmapInfoHeader
+        {
+            biSize = (uint)Marshal.SizeOf<NativeMethods.BitmapInfoHeader>(),
+            biWidth = screen.Width,
+            biHeight = -screen.Height,
+            biPlanes = 1,
+            biBitCount = 32,
+            biCompression = 0,
+        };
+        _dibSection = NativeMethods.CreateDIBSection(
+            _memDc, ref header, DibRgbColors, out _dibBits, IntPtr.Zero, 0);
+        if (_dibSection == IntPtr.Zero)
+        {
+            _lastError = "GDI CreateDIBSection 失败";
+            return false;
+        }
+        _oldBitmap = NativeMethods.SelectObject(_memDc, _dibSection);
+        _screenLeft = screen.DesktopLeft;
+        _screenTop = screen.DesktopTop;
+        EnsureTargets(screen.Width, screen.Height);
+        return true;
+    }
+
+    private Mat? ReadGrayGdi()
+    {
+        long now = Stopwatch.GetTimestamp();
+        long interval = Stopwatch.Frequency / GdiPollFps;
+        if (now < _nextPollAt)
+        {
+            long waitMs = (_nextPollAt - now) * 1000 / Stopwatch.Frequency;
+            Thread.Sleep((int)Math.Max(1, waitMs));
+            return null;
+        }
+        _nextPollAt = now + interval;
+
+        // 周期性检测所选显示器分辨率/位置变化（约 1 秒一次），变化时重建 GDI 目标。
+        if (now >= _nextGdiResizeCheckAt)
+        {
+            _nextGdiResizeCheckAt = now + Stopwatch.Frequency;
+            IReadOnlyList<ScreenInfo> screens = ScreenEnumerator.Enumerate();
+            ScreenInfo? current = _selectedDeviceName is not null
+                ? screens.FirstOrDefault(s => string.Equals(
+                    s.DeviceName, _selectedDeviceName, StringComparison.OrdinalIgnoreCase))
+                : ScreenSelector.Resolve(_selection, screens);
+            if (current is null)
+            {
+                _lastError = "所选显示器不可用（GDI 模式）";
+                _initialized = false;
+                _unavailable = true;
+                return null;
+            }
+            if (current.Width != Width || current.Height != Height ||
+                current.DesktopLeft != _screenLeft || current.DesktopTop != _screenTop)
+            {
+                EnsureGdiTargets(current);
+            }
+        }
+
+        if (_screenDc == IntPtr.Zero || _memDc == IntPtr.Zero ||
+            _dibBits == IntPtr.Zero || _gray is null)
+        {
+            _unavailable = true;
+            return null;
+        }
+
+        if (!NativeMethods.BitBlt(
+                _memDc, 0, 0, Width, Height, _screenDc, _screenLeft, _screenTop, SrcCopy))
+        {
+            _lastError = "GDI BitBlt 失败";
+            return null;
+        }
+
+        using Mat bgra = new Mat(Height, Width, MatType.CV_8UC4, _dibBits, Width * 4L);
+        Cv2.CvtColor(bgra, _gray, ColorConversionCodes.BGRA2GRAY);
+        if (now >= _nextPreviewAt)
+        {
+            Cv2.CvtColor(bgra, _bgrPreview!, ColorConversionCodes.BGRA2BGR);
+            _previewFresh = true;
+            _nextPreviewAt = now + Stopwatch.Frequency / PreviewFps;
+        }
+        _stats.OnCaptured();
+        _stats.NextSequence();
+        return _roiView ?? _gray;
+    }
+
+    private void GdiCleanup()
+    {
+        if (_dibSection != IntPtr.Zero)
+        {
+            if (_memDc != IntPtr.Zero && _oldBitmap != IntPtr.Zero)
+            {
+                NativeMethods.SelectObject(_memDc, _oldBitmap);
+            }
+            NativeMethods.DeleteObject(_dibSection);
+            _dibSection = IntPtr.Zero;
+            _dibBits = IntPtr.Zero;
+        }
+        if (_memDc != IntPtr.Zero)
+        {
+            NativeMethods.DeleteDC(_memDc);
+            _memDc = IntPtr.Zero;
+        }
+        if (_screenDc != IntPtr.Zero)
+        {
+            NativeMethods.ReleaseDC(IntPtr.Zero, _screenDc);
+            _screenDc = IntPtr.Zero;
+        }
+    }
+
+    private static class NativeMethods
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BitmapInfoHeader
+        {
+            public uint biSize;
+            public int biWidth;
+            public int biHeight;
+            public ushort biPlanes;
+            public ushort biBitCount;
+            public uint biCompression;
+            public uint biSizeImage;
+            public int biXPelsPerMeter;
+            public int biYPelsPerMeter;
+            public uint biClrUsed;
+            public uint biClrImportant;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr CreateDIBSection(
+            IntPtr hdc, ref BitmapInfoHeader pbmi, uint usage,
+            out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool BitBlt(
+            IntPtr hdcDest, int xDest, int yDest, int width, int height,
+            IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteObject(IntPtr ho);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteDC(IntPtr hdc);
     }
 
     private void CleanupDuplication()

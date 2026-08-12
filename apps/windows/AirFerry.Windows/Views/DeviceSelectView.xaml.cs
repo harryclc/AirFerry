@@ -36,7 +36,16 @@ public partial class DeviceSelectView : Page
     private void RefreshDevices()
     {
         DeviceList.Items.Clear();
-        _devices = DeviceEnumerator.Enumerate();
+        var screens = ScreenEnumerator.Enumerate()
+            .Select(s => new DeviceInfo(
+                FriendlyName: $"屏幕捕获 · {s}",
+                MonikerString: s.DeviceName,
+                Index: s.Index,
+                IsCaptureCard: false,
+                Kind: InputKind.Screen))
+            .ToList();
+        var cameras = DeviceEnumerator.Enumerate();
+        _devices = screens.Concat(cameras).ToList();
         if (_devices.Count == 0)
         {
             DeviceList.Items.Add("未检测到视频设备");
@@ -64,9 +73,11 @@ public partial class DeviceSelectView : Page
         }
         DeviceInfo d = _devices[DeviceList.SelectedIndex];
         StartButton.IsEnabled = true;
-        SelectedInfo.Text = d.IsCaptureCard
-            ? $"已选择采集卡: {d.FriendlyName}"
-            : $"已选择摄像头: {d.FriendlyName}";
+        SelectedInfo.Text = d.Kind == InputKind.Screen
+            ? $"已选择屏幕捕获 · {d.FriendlyName}"
+            : d.IsCaptureCard
+                ? $"已选择采集卡: {d.FriendlyName}"
+                : $"已选择摄像头: {d.FriendlyName}";
     }
 
     private void StartScan_Click(object sender, RoutedEventArgs e)
@@ -76,7 +87,10 @@ public partial class DeviceSelectView : Page
             return;
         }
         DeviceInfo selected = _devices[DeviceList.SelectedIndex];
-        NavigationService?.Navigate(new ScanView(selected.Index, _resumeRootId));
+        NavigationService?.Navigate(
+            selected.Kind == InputKind.Screen
+                ? new ScanView(InputDescriptor.Screen(selected.MonikerString), _resumeRootId)
+                : new ScanView(InputDescriptor.Camera(selected.Index), _resumeRootId));
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)

@@ -28,6 +28,9 @@
     <!-- DirectShow video-input device enumeration (webcams + USB/HDMI capture
          cards are the same FilterCategory.VideoInputDevice). -->
     <PackageReference Include="DirectShowLib.Standard" Version="1.0.0" />
+    <!-- DXGI Desktop Duplication (screen capture) via Vortice bindings. -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <!-- MVVM source generators (ObservableObject, RelayCommand). -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
   </ItemGroup>

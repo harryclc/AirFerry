@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>ScreenCaptureProbe</AssemblyName>
+    <RootNamespace>AirFerry.Windows.ScreenCaptureProbe</RootNamespace>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 复用主工程的 ScreenCaptureSource / ScreenEnumerator / ScreenInfo 等。 -->
+    <ProjectReference Include="..\AirFerry.Windows\AirFerry.Windows.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,3 +1,5 @@
+using AirFerry.Windows.Scan;
+
 namespace AirFerry.Windows.Models;
 
 /// <summary>
@@ -25,10 +27,16 @@ public sealed record DeviceInfo(
     /// capture card rather than a webcam. Surfaced in the UI so the user can
     /// tell at a glance, but the device behaves identically either way.
     /// </summary>
-    bool IsCaptureCard)
+    bool IsCaptureCard,
+    /// <summary>输入类型：摄像头/采集卡或屏幕捕获。</summary>
+    InputKind Kind = InputKind.Camera)
 {
     public override string ToString()
     {
+        if (Kind == InputKind.Screen)
+        {
+            return FriendlyName;
+        }
         if (IsCaptureCard)
         {
             return $"{FriendlyName} (采集卡)";

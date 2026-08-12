@@ -36,7 +36,7 @@ namespace AirFerry.Windows.ViewModels;
 /// </remarks>
 public partial class ScanViewModel : ObservableObject, IDisposable
 {
-    private AirFerry.Windows.Scan.VideoCapture? _capture;
+    private IFrameProducer? _capture;
     private QrDecodePool? _pool;
     private ReceiverSession? _session;
     private Thread? _producerThread;
@@ -142,23 +142,23 @@ public partial class ScanViewModel : ObservableObject, IDisposable
     private static string TempDir => Path.Combine(Path.GetTempPath(), "AirFerry");
 
     /// <summary>
-    /// Start the pipeline on <paramref name="deviceIndex"/>. Idempotent —
+    /// Start the pipeline on <paramref name="input"/>. Idempotent —
     /// calling while running first stops the previous session.
     /// </summary>
     [RelayCommand]
-    public void StartScan(int deviceIndex)
+    public void StartScan(InputDescriptor input)
     {
         StopScan();
         lock (_lifecycleGate)
         {
             if (!_deferredCleanupTask.IsCompleted)
             {
-                StatusText = "上一个摄像头仍在后台释放，请稍后重试";
+                StatusText = "上一个输入仍在后台释放，请稍后重试";
                 return;
             }
         }
         Interlocked.Increment(ref _sessionEpoch);
-        SelectedDeviceIndex = deviceIndex;
+        SelectedDeviceIndex = input.Kind == InputKind.Camera ? input.DeviceIndex : -1;
         IsComplete = false;
         IsRecovering = false;
         Progress = 0;
@@ -178,7 +178,21 @@ public partial class ScanViewModel : ObservableObject, IDisposable
             }
             _session = new ReceiverSession();
             Interlocked.Exchange(ref _recoveryStarted, 0);
-            _capture = new Scan.VideoCapture(deviceIndex);
+            if (input.Kind == InputKind.Screen)
+            {
+                if (ScreenEnumerator.Enumerate().Count == 0)
+                {
+                    StopScan();
+                    StatusText = "未检测到可用的显示器";
+                    return;
+                }
+                _capture = new ScreenCaptureSource(
+                    input.ScreenSelection, ScreenSettingsStore.Load().Screen);
+            }
+            else
+            {
+                _capture = new Scan.VideoCapture(input.DeviceIndex);
+            }
             if (!_capture.IsOpen)
             {
                 StopScan();
@@ -218,7 +232,7 @@ public partial class ScanViewModel : ObservableObject, IDisposable
     {
         Thread? producer;
         QrDecodePool? pool;
-        Scan.VideoCapture? capture;
+        IFrameProducer? capture;
         ReceiverSession? session;
         Task<RecoveryResult?>? recoveryTask;
         Task cleanup;
@@ -313,7 +327,7 @@ public partial class ScanViewModel : ObservableObject, IDisposable
     private static void CleanupDetachedPipeline(
         Thread? producer,
         QrDecodePool? pool,
-        Scan.VideoCapture? capture,
+        IFrameProducer? capture,
         ReceiverSession? session,
         Task<RecoveryResult?>? recoveryTask)
     {
@@ -400,7 +414,7 @@ public partial class ScanViewModel : ObservableObject, IDisposable
             // Snapshot references once per iteration. StopScan may detach the
             // fields while a driver call is blocked, but keeps these objects
             // alive until this producer exits.
-            Scan.VideoCapture? capture = _capture;
+            IFrameProducer? capture = _capture;
             QrDecodePool? pool = _pool;
             if (capture is null || pool is null) break;
             Mat? gray = capture.ReadGray();
@@ -410,7 +424,7 @@ public partial class ScanViewModel : ObservableObject, IDisposable
                 Thread.Sleep(10);
                 continue;
             }
-            // Submit clones the pixels; the Mat itself is reused by VideoCapture.
+            // Submit clones the pixels; the Mat itself is reused by the source.
             pool.Submit(gray);
 
             long now = Stopwatch.GetTimestamp();
@@ -1032,8 +1046,17 @@ public partial class ScanViewModel : ObservableObject, IDisposable
         long now = Stopwatch.GetTimestamp();
         if (pool is not null)
         {
-            ScanMetricsText = $"采集 {pool.CapturedFrames} 帧 · " +
+            string metrics = $"采集 {pool.CapturedFrames} 帧 · " +
                 $"丢弃 {pool.DroppedFrames} 帧 · 解码 {pool.DecodedSymbols} 码";
+            if (_capture is ScreenCaptureSource screen)
+            {
+                metrics += $" · 捕获 {screen.Stats.CaptureFps:F0} FPS";
+                if (screen.Width > 0 && screen.Height > 0)
+                {
+                    metrics += $" · {screen.Width}×{screen.Height}";
+                }
+            }
+            ScanMetricsText = metrics;
         }
         if (pool is null || session is null)
         {

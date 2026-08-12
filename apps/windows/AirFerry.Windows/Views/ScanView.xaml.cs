@@ -19,6 +19,7 @@ namespace AirFerry.Windows.Views;
 public partial class ScanView : Page
 {
     private readonly ScanViewModel _vm;
+    private readonly InputDescriptor _input;
     private readonly DispatcherTimer _progressTimer;
     private readonly object _stopGate = new();
     private Task _stopTask = Task.CompletedTask;
@@ -28,7 +29,13 @@ public partial class ScanView : Page
     private volatile bool _pageActive;
 
     public ScanView(int deviceIndex, string? resumeRootId = null)
+        : this(InputDescriptor.Camera(deviceIndex), resumeRootId)
     {
+    }
+
+    public ScanView(InputDescriptor input, string? resumeRootId = null)
+    {
+        _input = input;
         InitializeComponent();
         _vm = new ScanViewModel(resumeRootId);
         _vm.TransferCompleted += OnTransferCompleted;
@@ -55,11 +62,11 @@ public partial class ScanView : Page
             IsEnabled = false,
         };
 
-        Loaded += async (_, _) => await StartAsync(deviceIndex);
+        Loaded += async (_, _) => await StartAsync(_input);
         Unloaded += async (_, _) => await CleanupAsync();
     }
 
-    private async Task StartAsync(int deviceIndex)
+    private async Task StartAsync(InputDescriptor input)
     {
         int epoch = Interlocked.Increment(ref _activationEpoch);
         _pageActive = true;
@@ -84,7 +91,7 @@ public partial class ScanView : Page
         }
 
         DrawProgressRing(0);
-        _vm.StartScan(deviceIndex);
+        _vm.StartScan(input);
         _progressTimer.Start();
         StopButton.Content = _vm.IsScanning ? "⏹ 停止" : "▶ 重试";
     }
@@ -284,7 +291,7 @@ public partial class ScanView : Page
             }
             else
             {
-                await StartAsync(_vm.SelectedDeviceIndex);
+                await StartAsync(_input);
             }
         }
         catch (Exception ex)

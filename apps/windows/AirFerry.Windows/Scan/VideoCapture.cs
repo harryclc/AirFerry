@@ -30,7 +30,7 @@ namespace AirFerry.Windows.Scan;
 /// calls them; the WPF dispatcher never reads from the device.
 /// </para>
 /// </remarks>
-public sealed class VideoCapture : IDisposable
+public sealed class VideoCapture : IFrameProducer
 {
     private readonly OpenCvSharp.VideoCapture _cap;
     private readonly Mat _bgr = new();

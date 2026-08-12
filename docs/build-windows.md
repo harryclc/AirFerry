@@ -11,6 +11,7 @@
 | UI | WPF (.NET 8, C#) | 对标 Android Compose UI |
 | 相机/采集卡 | OpenCvSharp4 (DirectShow 后端) | 单句柄读取；Gray 送解码、池化 BGR24 快照送预览 |
 | 设备枚举 | DirectShowLib (DsDevice) | `FilterCategory.VideoInputDevice` 同时覆盖摄像头+采集卡 |
+| 屏幕捕获 | Vortice.Direct3D11 + Vortice.DXGI | DXGI Desktop Duplication，单显示器可选（primary / 设备名 / 序号） |
 | QR 解码 | ZXing-C++（全帧/ROI 均 TryHarder + TryInvert） | `core/zxing-decoder/` + Windows 薄 C ABI，选项与 Android v1.1.3 相同 |
 | 核心引擎 | Rust `transfer-engine` (C ABI, `--features cffi`) | 编解码逻辑与 Android/WASM 共享，编译为 `transfer_engine.dll` |
 | MVVM | CommunityToolkit.Mvvm | ObservableObject / RelayCommand 源生成器 |
@@ -95,6 +96,12 @@ dotnet build -c Release
 # 产物: AirFerry.Windows\bin\x64\Release\net8.0-windows\win-x64\AirFerry.exe
 ```
 
+可选：独立屏幕捕获探测工具（验证 DXGI 捕获，不依赖 ZXing/RaptorQ 原生 DLL）：
+
+```powershell
+dotnet build ScreenCaptureProbe/ScreenCaptureProbe.csproj -c Release
+```
+
 ### 4.4 运行
 
 ```powershell
@@ -163,6 +170,25 @@ Windows 端的核心新增功能。启动后进入**设备选择页**：
 若后续确实需要桌面端同时覆盖 macOS/Linux，建议先把扫描编排、文件库和接收结果抽为不依赖 WPF 的 .NET 类库，再用 Avalonia 替换视图层。不要在现有 WPF 上继续叠 MAUI/Electron：这会保留 OpenCV、ZXing、Rust FFI 的全部复杂度，同时再增加一套运行时和打包链。
 
 ---
+
+### 7.3 屏幕捕获（单显示器可选）
+
+Windows 接收端新增基于 DXGI Desktop Duplication 的屏幕捕获输入源 `ScreenCaptureSource`，
+用于捕获华为 FusionAccess 全屏云桌面的最终显示画面。要点：
+
+- 设备选择页新增“屏幕捕获”分组，列出所有已连接显示器（主屏标记）；每次只捕获用户选定的单显示器，不做多显示器拼接。
+- 与相机源共用 `IFrameProducer` 接口（`ReadGray` 灰度帧 + `SnapshotBgr` 预览快照），复用现有 `QrDecodePool`（ZXing-C++）→ RaptorQ 链路。
+- 输入描述见 `Scan/InputDescriptor.cs`；显示器枚举/选择见 `Scan/ScreenInfo.cs`、`Scan/ScreenEnumerator.cs`、`Scan/ScreenCaptureSource.cs`。
+- ROI 默认关闭（整帧 → 解码），可在设置页“屏幕捕获”卡片配置，持久化于 `%AppData%\AirFerry\settings.json`。
+- 异常恢复：`DXGI_ERROR_ACCESS_LOST` → 等待 200ms → 按设备名重解析 → 重建 duplication；所选显示器消失时提示“显示器不可用”，不静默换屏。
+- 详细设计见 [`docs/screen-capture.md`](screen-capture.md)。
+
+探测工具（`apps/windows/ScreenCaptureProbe`）：
+
+```powershell
+ScreenCaptureProbe --screen primary --seconds 10 --save-frame desktop.png
+ScreenCaptureProbe --screen 1
+```
 
 ## 8. 产物
 

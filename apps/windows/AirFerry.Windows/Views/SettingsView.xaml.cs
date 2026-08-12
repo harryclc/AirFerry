@@ -1,22 +1,20 @@
-using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using AirFerry.Windows.Scan;
 
 namespace AirFerry.Windows.Views;
 
 /// <summary>
 /// Settings page — mirrors Android's <c>SettingsActivity</c>: a "default
 /// redundancy" slider persisted to %AppData%\AirFerry\settings.json (the .NET
-/// analogue of SharedPreferences), plus the version read from the assembly (the
-/// single source of truth — the csproj <c>&lt;Version&gt;</c>).
+/// analogue of SharedPreferences), plus screen-capture ROI settings in the same
+/// file, and the version read from the assembly (the single source of truth —
+/// the csproj <c>&lt;Version&gt;</c>).
 /// </summary>
 public partial class SettingsView : Page
 {
-    private const int DefaultRedundancy = 5;
-    private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "AirFerry", "settings.json");
+    private bool _populating;
 
     public SettingsView()
     {
@@ -26,65 +24,67 @@ public partial class SettingsView : Page
 
     private void Populate()
     {
-        int redundancy = LoadRedundancy();
-        RedundancySlider.Value = redundancy;
-        RedundancyText.Text = $"{redundancy}%";
+        _populating = true;
+        try
+        {
+            (int redundancy, ScreenCaptureSettings screen) = ScreenSettingsStore.Load();
+            RedundancySlider.Value = redundancy;
+            RedundancyText.Text = $"{redundancy}%";
+            RoiEnabledCheck.IsChecked = screen.RoiEnabled;
+            RoiXBox.Text = screen.RoiX.ToString();
+            RoiYBox.Text = screen.RoiY.ToString();
+            RoiWidthBox.Text = screen.RoiWidth.ToString();
+            RoiHeightBox.Text = screen.RoiHeight.ToString();
 
-        // Read version from the assembly (the csproj <Version>).
-        Version? ver = Assembly.GetExecutingAssembly().GetName().Version;
-        VersionText.Text = ver is not null ? $"版本 {ver.Major}.{ver.Minor}.{ver.Build}" : "版本 ?";
+            // Read version from the assembly (the csproj <Version>).
+            Version? ver = Assembly.GetExecutingAssembly().GetName().Version;
+            VersionText.Text = ver is not null ? $"版本 {ver.Major}.{ver.Minor}.{ver.Build}" : "版本 ?";
+        }
+        finally
+        {
+            _populating = false;
+        }
     }
 
     private void Redundancy_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_populating)
+        {
+            return;
+        }
         int value = (int)Math.Round(e.NewValue);
         RedundancyText.Text = $"{value}%";
-        SaveRedundancy(value);
+        Save();
     }
 
-    private static int LoadRedundancy()
+    private void Roi_Changed(object sender, RoutedEventArgs e)
     {
-        try
+        if (_populating)
         {
-            if (File.Exists(SettingsPath))
-            {
-                string json = File.ReadAllText(SettingsPath);
-                // Minimal hand-rolled parse — avoids a System.Text.Json dep here.
-                int idx = json.IndexOf("\"default_redundancy\"");
-                if (idx >= 0)
-                {
-                    int colon = json.IndexOf(':', idx);
-                    if (colon >= 0)
-                    {
-                        int start = colon + 1;
-                        while (start < json.Length && (json[start] == ' ' || json[start] == '\t')) start++;
-                        int end = start;
-                        while (end < json.Length && char.IsDigit(json[end])) end++;
-                        if (int.TryParse(json.AsSpan(start, end - start), out int v))
-                        {
-                            return Math.Clamp(v, 5, 50);
-                        }
-                    }
-                }
-            }
+            return;
         }
-        catch { /* fall through to default */ }
-        return DefaultRedundancy;
+        Save();
     }
 
-    private static void SaveRedundancy(int value)
+    private void Save()
     {
         try
         {
-            string? dir = Path.GetDirectoryName(SettingsPath);
-            if (dir is not null)
-            {
-                Directory.CreateDirectory(dir);
-            }
-            File.WriteAllText(SettingsPath, $"{{\"default_redundancy\":{value}}}");
+            (_, ScreenCaptureSettings current) = ScreenSettingsStore.Load();
+            int redundancy = (int)Math.Round(RedundancySlider.Value);
+            var screen = new ScreenCaptureSettings(
+                RoiEnabledCheck.IsChecked == true,
+                ParseInt(RoiXBox.Text, current.RoiX),
+                ParseInt(RoiYBox.Text, current.RoiY),
+                ParseInt(RoiWidthBox.Text, current.RoiWidth),
+                ParseInt(RoiHeightBox.Text, current.RoiHeight));
+            ScreenSettingsStore.Save(redundancy, screen);
         }
         catch { /* settings are best-effort; never block the UI */ }
     }
+
+    private static int ParseInt(string? text, int fallback) =>
+        int.TryParse(text, out int v) ? v : fallback;
 
     private void Back_Click(object sender, RoutedEventArgs e) => NavigationService?.GoBack();
 }

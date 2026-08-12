@@ -40,7 +40,8 @@ AirFerry/
 │       ├── native/                     #   Windows ZXing C ABI 包装器 + CMake
 │       ├── AirFerry.Windows/            #   主项目（Views/ViewModels/Scan/Bundle/Native）
 │       │   └── runtime/                 #   transfer_engine.dll + airferry_zxing.dll（git-ignored）
-│       └── AirFerry.Windows.Tests/      #   协议层单元测试（net8.0，跨平台可跑）
+│       ├── AirFerry.Windows.Tests/      #   协议层单元测试（net8.0，跨平台可跑）
+│       └── ScreenCaptureProbe/           #   独立屏幕捕获探测工具（--screen/--seconds/--save-frame）
 ├── docs/                       # 协议 / 架构 / API / 构建说明（中文）
 ├── scripts/build-all.sh        # 一键构建脚本（含 windows 子命令）
 ├── scripts/build-windows.ps1   # Windows 端原生 PowerShell 构建脚本（首选）
@@ -150,6 +151,8 @@ adb install app/build/outputs/apk/release/app-release.apk
 # 首选：PowerShell 原生脚本（须 Windows + .NET 8 SDK + CMake/VS C++）
 .\scripts\build-windows.ps1           # 构建（Rust DLL + ZXing-C++ DLL + WPF）
 .\scripts\build-windows.ps1 -Pack     # 构建 + 打包到 dist/
+# 可选：独立屏幕捕获探测工具（无需原生 DLL 即可验证 DXGI 捕获）
+dotnet build apps/windows/ScreenCaptureProbe/ScreenCaptureProbe.csproj -c Release
 
 # 或 Git Bash/WSL 下用 build-all.sh 的 windows 子命令（逻辑等价）
 ./scripts/build-all.sh windows
